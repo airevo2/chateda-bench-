@@ -27,3 +27,4 @@ python your_file_name.py
 
 #The generated Python scripts assume the required Verilog/LEF files are in the current directory. Modify file names and paths in the script if your design files are located elsewhere.
 
+#If you want to use claude APIs, modify eda.py
