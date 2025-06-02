@@ -1,83 +1,96 @@
-
 import os
 import openai
+import csv
+from openai import OpenAI
+import re
 
 #  OpenAI API
 openai.api_key = os.getenv("OPENAI_API_KEY")
-
+# openai.api_key = ""
 # read chatEDA bench
-def load_tasks(path="data/test/ChatEDA-Bench.txt"):
+def load_tasks(path="ChatEDA-Bench.txt"):
+    tasks = []
+    current = []
     with open(path, "r", encoding="utf-8") as f:
-        tasks = [line.strip() for line in f if line.strip()]
+        for line in f:
+            text = line.strip()
+            # new task
+            if text.startswith("<Requirement>"):
+                if current:
+                    tasks.append(" ".join(current))
+                    current = []
+                continue
+            # skip empty line
+            if not text:
+                continue
+            current.append(text)
+        # save last task
+        if current:
+            tasks.append(" ".join(current))
     return tasks
 
 # 3. INFERENCE
 def eval_task(task, model="gpt-4"):
-    prompt = f"### System:
+    prompt = f"""### System:
 You are AI assistant, capable of utilizing numerous
 tools and functions. User will give you a task.
 Your job is to generate a Python script to complete
 the task using the provided tools and functions.
-,→
-,→
-,→
+
 While performing the task think step-by-step and
-justify your steps.,→
+justify your steps.
+
 You have access to the following tools and functions:
 chateda is an autonomous tool that can automate the RTL
 to GDSII flow by executing steps through
 tools(functions) with various parameters.
-,→
-,→
 tune is a function that can perform parameter tuning.
 Specifically, you have access to the following details
-of the provided tools and functions:,→
+of the provided tools and functions:
 <<<API documents>>>
 ### User:
 <<<Requirement>>>{task}
-Let's first describe and explain what the task is
-asking. Then, analyze how to complete the task step
-by step using the provided tools and functions.
-Finally, generate the Python script according to
-your analysis.
-,→
-,→
-,→
-,→
+
+Let's first describe and explain what the task is asking. Then, analyze how to complete the task step
+by step using the provided tools and functions.Finally, generate the Python script according to your analysis.
+
 ### Assistant:
-<<<Response>>>"
-    resp = openai.ChatCompletion.create(
+<<<Response>>>"""
+    
+    client = OpenAI(api_key=openai.api_key)
+    resp = client.chat.completions.create(
         model=model,
-        messages=[{"role": "user", "content": prompt}],
+        messages=[{"role":"user","content":prompt}],
         temperature=0.0
     )
-    code = resp.choices[0].message["content"]
-    # checking syntax error
-    passed = "openroad.run" in code
-    return passed, code
+    raw = resp.choices[0].message.content
+    # extract ```python ... ``` code block
+    match = re.search(r'```(?:python)?\s*([\s\S]*?)```', raw)
+    code = match.group(1).strip() if match else raw
+    return code
 
-# 准备输出目录
+if __name__ == "__main__":
     script_dir = "generated_scripts"
     result_dir = "results"
     os.makedirs(script_dir, exist_ok=True)
     os.makedirs(result_dir, exist_ok=True)
 
-    # CSV 结果文件
+    tasks = load_tasks()
+    total = len(tasks)
+
     result_csv = os.path.join(result_dir, "chateda_eval_results.csv")
     with open(result_csv, "w", newline="", encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile)
-        writer.writerow(["task_id", "passed", "script_path"])
+        writer.writerow(["task_id", "script_path"])
 
-        # 遍历所有任务
         for i, task in enumerate(tasks, 1):
-            passed, code = eval_task(task)
-            status = "✔" if passed else "✘"
-            print(f"[{i}/{total}] {status} {task[:50]}...")
+            code = eval_task(task)
+            print(f"[{i}/{total}] save：{task[:50]}...")
 
-            # 保存脚本：eg. generated_scripts/01_simple_process.py
-            # 使用任务序号+前 5 个汉字作为文件名辅助
             safe_name = task.replace("\n", " ")[:10].replace(" ", "_")
             filename = f"{i:02d}_{safe_name}.py"
             script_path = os.path.join(script_dir, filename)
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(code)
+
+            writer.writerow([i, script_path])
